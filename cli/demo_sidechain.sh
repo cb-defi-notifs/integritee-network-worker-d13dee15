@@ -20,16 +20,13 @@
 #
 # usage:
 #  export RUST_LOG_LOG=integritee-cli=info,ita_stf=info
-#  demo_sidechain.sh -p <NODEPORT> -A <WORKER_1_PORT> -B <WORKER_2_PORT> -m file
+#  demo_sidechain.sh -p <NODEPORT> -A <WORKER_1_PORT> -B <WORKER_2_PORT>
 #
 # TEST_BALANCE_RUN is either "first" or "second"
-# if -m file is set, the mrenclave will be read from file.
+.
 
-while getopts ":m:p:A:B:t:u:W:V:C:" opt; do
+while getopts ":p:A:B:t:u:W:V:C:" opt; do
     case $opt in
-        m)
-            READ_MRENCLAVE=$OPTARG
-            ;;
         p)
             INTEGRITEE_RPC_PORT=$OPTARG
             ;;
@@ -85,39 +82,33 @@ AMOUNTTRANSFER=$((2 * UNIT))
 CLIENTWORKER1="${CLIENT_BIN} -p ${INTEGRITEE_RPC_PORT} -P ${WORKER_1_PORT} -u ${INTEGRITEE_RPC_URL} -U ${WORKER_1_URL}"
 CLIENTWORKER2="${CLIENT_BIN} -p ${INTEGRITEE_RPC_PORT} -P ${WORKER_2_PORT} -u ${INTEGRITEE_RPC_URL} -U ${WORKER_2_URL}"
 
-if [ "$READ_MRENCLAVE" = "file" ]
-then
-    read MRENCLAVE <<< $(cat ~/mrenclave.b58)
-    echo "Reading MRENCLAVE from file: ${MRENCLAVE}"
-else
-    # This will always take the first MRENCLAVE found in the registry !!
-    read MRENCLAVE <<< $($CLIENTWORKER1 list-workers | awk '/  MRENCLAVE: / { print $2; exit }')
-    echo "Reading MRENCLAVE from worker list: ${MRENCLAVE}"
-fi
-[[ -z $MRENCLAVE ]] && { echo "MRENCLAVE is empty. cannot continue" ; exit 1; }
+# we simply believe the enclave here without verifying the teerex RA
+MRENCLAVE="$($CLIENTWORKER1 trusted get-fingerprint)"
+echo "Using MRENCLAVE: ${MRENCLAVE}"
 
-echo ""
-echo "* Create a new incognito account for Alice"
-ICGACCOUNTALICE=//AliceIncognito
-echo "  Alice's incognito account = ${ICGACCOUNTALICE}"
-echo ""
+VAULT=$(${CLIENTWORKER1} trusted get-shard-vault)
+echo "  Vault account = ${VAULT}"
 
 echo "* Create a new incognito account for Bob"
 ICGACCOUNTBOB=//BobIncognito
 echo "  Bob's incognito account = ${ICGACCOUNTBOB}"
 echo ""
 
-echo "* Issue ${INITIALFUNDS} tokens to Alice's incognito account (on worker 1)"
-${CLIENTWORKER1} trusted --mrenclave ${MRENCLAVE} --direct set-balance ${ICGACCOUNTALICE} ${INITIALFUNDS}
+echo "* Shield ${INITIALFUNDS} tokens to Charlie's account on L2"
+${CLIENTWORKER1} transfer //Charlie ${VAULT} ${INITIALFUNDS}
 echo ""
 
-echo "Get balance of Alice's incognito account (on worker 1)"
-${CLIENTWORKER1} trusted --mrenclave ${MRENCLAVE} balance ${ICGACCOUNTALICE}
+echo "* Waiting 30 seconds"
+sleep 30
 echo ""
 
-# Send funds from Alice to Bobs account, on worker 1.
-echo "* First transfer: Send ${AMOUNTTRANSFER} funds from Alice's incognito account to Bob's incognito account (on worker 1)"
-$CLIENTWORKER1 trusted --mrenclave ${MRENCLAVE} --direct transfer ${ICGACCOUNTALICE} ${ICGACCOUNTBOB} ${AMOUNTTRANSFER}
+echo "Get balance of Charlie's incognito account (on worker 1)"
+${CLIENTWORKER1} trusted --mrenclave ${MRENCLAVE} balance //Charlie
+echo ""
+
+# Send funds from Charlie to Bobs account, on worker 1.
+echo "* First transfer: Send ${AMOUNTTRANSFER} funds from Charlie's incognito account to Bob's incognito account (on worker 1)"
+$CLIENTWORKER1 trusted --mrenclave ${MRENCLAVE} --direct transfer //Charlie ${ICGACCOUNTBOB} ${AMOUNTTRANSFER}
 echo ""
 
 # Prevent nonce clash when sending direct trusted calls to different workers.
@@ -125,9 +116,9 @@ echo "* Waiting 2 seconds"
 sleep 2
 echo ""
 
-# Send funds from Alice to Bobs account, on worker 2.
-echo "* Second transfer: Send ${AMOUNTTRANSFER} funds from Alice's incognito account to Bob's incognito account (on worker 2)"
-$CLIENTWORKER2 trusted --mrenclave ${MRENCLAVE} --direct transfer ${ICGACCOUNTALICE} ${ICGACCOUNTBOB} ${AMOUNTTRANSFER}
+# Send funds from Charlie to Bobs account, on worker 2.
+echo "* Second transfer: Send ${AMOUNTTRANSFER} funds from Charlie's incognito account to Bob's incognito account (on worker 2)"
+$CLIENTWORKER2 trusted --mrenclave ${MRENCLAVE} --direct transfer //Charlie ${ICGACCOUNTBOB} ${AMOUNTTRANSFER}
 echo ""
 
 # Prevent getter being executed too early and returning an outdated result, before the transfer was made.
@@ -135,9 +126,9 @@ echo "* Waiting 2 seconds"
 sleep 2
 echo ""
 
-echo "* Get balance of Alice's incognito account (on worker 1)"
-ALICE_BALANCE=$(${CLIENTWORKER1} trusted --mrenclave ${MRENCLAVE} balance ${ICGACCOUNTALICE} | xargs)
-echo "$ALICE_BALANCE"
+echo "* Get balance of Charlie's incognito account (on worker 1)"
+CHARLIE_BALANCE=$(${CLIENTWORKER1} trusted --mrenclave ${MRENCLAVE} balance //Charlie | xargs)
+echo "$CHARLIE_BALANCE"
 echo ""
 
 echo "* Get balance of Bob's incognito account (on worker 2)"
@@ -145,15 +136,15 @@ BOB_BALANCE=$(${CLIENTWORKER2} trusted --mrenclave ${MRENCLAVE} balance ${ICGACC
 echo "$BOB_BALANCE"
 echo ""
 
-ALICE_EXPECTED_BALANCE=$(( 1 * UNIT ))
+CHARLIE_EXPECTED_BALANCE=$(( 1 * UNIT ))
 BOB_EXPECTED_BALANCE=$(( 4 * UNIT ))
 
-echo "* Verifying Alice's balance"
-if (( ALICE_BALANCE >= ALICE_EXPECTED_BALANCE ? ALICE_BALANCE - ALICE_EXPECTED_BALANCE > FEE_TOLERANCE : ALICE_EXPECTED_BALANCE - ALICE_BALANCE > FEE_TOLERANCE)); then
-  echo "Alice's balance is wrong (expected: $ALICE_EXPECTED_BALANCE, actual: $ALICE_BALANCE), tolerance = $FEE_TOLERANCE"
+echo "* Verifying Charlie's balance"
+if (( CHARLIE_BALANCE >= CHARLIE_EXPECTED_BALANCE ? CHARLIE_BALANCE - CHARLIE_EXPECTED_BALANCE > FEE_TOLERANCE : CHARLIE_EXPECTED_BALANCE - CHARLIE_BALANCE > FEE_TOLERANCE)); then
+  echo "Charlie's balance is wrong (expected: $CHARLIE_EXPECTED_BALANCE, actual: $CHARLIE_BALANCE), tolerance = $FEE_TOLERANCE"
   exit 1
 else
-    echo "Alice's balance is correct ($ALICE_BALANCE)"
+    echo "Charlie's balance is correct ($CHARLIE_BALANCE)"
 fi
 echo ""
 

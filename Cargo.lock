@@ -15,7 +15,7 @@ dependencies = [
 [[package]]
 name = "ac-compose-macros"
 version = "0.4.2"
-source = "git+https://github.com/brenzi/substrate-api-client.git?branch=polkadot-v0.9.42-tag-v0.14.0-retracted#d01bc07fe0c8a8db1451d0d5c8bf82493b274d80"
+source = "git+https://github.com/encointer/substrate-api-client.git?branch=v0.9.42-tag-v0.14.0-retracted-check-metadata-hash#eddca35c73b5e2e3d0371fa923a0ba605c2f0d61"
 dependencies = [
  "ac-primitives",
  "log 0.4.20",
@@ -25,7 +25,7 @@ dependencies = [
 [[package]]
 name = "ac-node-api"
 version = "0.5.1"
-source = "git+https://github.com/brenzi/substrate-api-client.git?branch=polkadot-v0.9.42-tag-v0.14.0-retracted#d01bc07fe0c8a8db1451d0d5c8bf82493b274d80"
+source = "git+https://github.com/encointer/substrate-api-client.git?branch=v0.9.42-tag-v0.14.0-retracted-check-metadata-hash#eddca35c73b5e2e3d0371fa923a0ba605c2f0d61"
 dependencies = [
  "ac-primitives",
  "bitvec",
@@ -50,7 +50,7 @@ dependencies = [
 [[package]]
 name = "ac-primitives"
 version = "0.9.0"
-source = "git+https://github.com/brenzi/substrate-api-client.git?branch=polkadot-v0.9.42-tag-v0.14.0-retracted#d01bc07fe0c8a8db1451d0d5c8bf82493b274d80"
+source = "git+https://github.com/encointer/substrate-api-client.git?branch=v0.9.42-tag-v0.14.0-retracted-check-metadata-hash#eddca35c73b5e2e3d0371fa923a0ba605c2f0d61"
 dependencies = [
  "frame-system",
  "impl-serde",
@@ -2557,7 +2557,7 @@ dependencies = [
 
 [[package]]
 name = "integritee-cli"
-version = "0.13.0"
+version = "0.14.2"
 dependencies = [
  "array-bytes 6.1.0",
  "base58",
@@ -2607,7 +2607,7 @@ dependencies = [
 
 [[package]]
 name = "integritee-service"
-version = "0.13.0"
+version = "0.14.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2799,9 +2799,11 @@ dependencies = [
  "frame-executive",
  "frame-support",
  "frame-system",
+ "itp-randomness",
  "itp-sgx-runtime-primitives",
  "pallet-balances",
  "pallet-evm",
+ "pallet-guess-the-number",
  "pallet-parentchain",
  "pallet-sudo",
  "pallet-timestamp",
@@ -2819,6 +2821,7 @@ dependencies = [
 name = "ita-stf"
 version = "0.9.0"
 dependencies = [
+ "base58",
  "frame-support",
  "frame-system",
  "ita-sgx-runtime",
@@ -2836,6 +2839,7 @@ dependencies = [
  "pallet-balances",
  "pallet-parentchain",
  "pallet-sudo",
+ "pallet-timestamp",
  "parity-scale-codec",
  "rlp",
  "sgx_tstd",
@@ -3231,6 +3235,7 @@ dependencies = [
 name = "itp-enclave-metrics"
 version = "0.9.0"
 dependencies = [
+ "itp-types",
  "parity-scale-codec",
  "sgx_tstd",
  "substrate-fixed",
@@ -3361,6 +3366,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "itp-randomness"
+version = "0.1.0"
+dependencies = [
+ "sgx_rand",
+]
+
+[[package]]
 name = "itp-rpc"
 version = "0.9.0"
 dependencies = [
@@ -3442,6 +3454,7 @@ version = "0.9.0"
 dependencies = [
  "hex",
  "itc-parentchain-test",
+ "itp-enclave-metrics",
  "itp-node-api",
  "itp-ocall-api",
  "itp-sgx-crypto",
@@ -3450,6 +3463,7 @@ dependencies = [
  "itp-stf-primitives",
  "itp-stf-state-handler",
  "itp-stf-state-observer",
+ "itp-storage",
  "itp-test",
  "itp-time-utils",
  "itp-top-pool",
@@ -3837,6 +3851,9 @@ dependencies = [
 name = "its-rpc-handler"
 version = "0.9.0"
 dependencies = [
+ "itp-enclave-metrics",
+ "itp-import-queue",
+ "itp-ocall-api",
  "itp-rpc",
  "itp-stf-primitives",
  "itp-top-pool-author",
@@ -5153,10 +5170,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "pallet-guess-the-number"
+version = "0.11.0"
+dependencies = [
+ "env_logger 0.9.3",
+ "frame-support",
+ "frame-system",
+ "itp-randomness",
+ "log 0.4.20",
+ "pallet-balances",
+ "pallet-timestamp",
+ "parity-scale-codec",
+ "scale-info",
+ "serde 1.0.193",
+ "sp-core",
+ "sp-io 7.0.0 (git+https://github.com/paritytech/substrate.git?branch=polkadot-v0.9.42)",
+ "sp-keyring",
+ "sp-runtime",
+ "sp-std",
+]
+
+[[package]]
 name = "pallet-parentchain"
 version = "0.11.0"
-source = "git+https://github.com/integritee-network/pallets.git?branch=sdk-v0.13.0-polkadot-v0.9.42#abf29acd41a0fca9cd7025b297b6a9fa272a122f"
 dependencies = [
+ "env_logger 0.9.3",
  "frame-support",
  "frame-system",
  "log 0.4.20",
@@ -5166,6 +5204,7 @@ dependencies = [
  "serde 1.0.193",
  "sp-core",
  "sp-io 7.0.0 (git+https://github.com/paritytech/substrate.git?branch=polkadot-v0.9.42)",
+ "sp-keyring",
  "sp-runtime",
  "sp-std",
 ]
@@ -7709,7 +7748,7 @@ dependencies = [
 [[package]]
 name = "substrate-api-client"
 version = "0.14.0"
-source = "git+https://github.com/brenzi/substrate-api-client.git?branch=polkadot-v0.9.42-tag-v0.14.0-retracted#d01bc07fe0c8a8db1451d0d5c8bf82493b274d80"
+source = "git+https://github.com/encointer/substrate-api-client.git?branch=v0.9.42-tag-v0.14.0-retracted-check-metadata-hash#eddca35c73b5e2e3d0371fa923a0ba605c2f0d61"
 dependencies = [
  "ac-compose-macros",
  "ac-node-api",
@@ -7747,7 +7786,7 @@ dependencies = [
 [[package]]
 name = "substrate-client-keystore"
 version = "0.9.1"
-source = "git+https://github.com/brenzi/substrate-api-client.git?branch=polkadot-v0.9.42-tag-v0.14.0-retracted#d01bc07fe0c8a8db1451d0d5c8bf82493b274d80"
+source = "git+https://github.com/encointer/substrate-api-client.git?branch=v0.9.42-tag-v0.14.0-retracted-check-metadata-hash#eddca35c73b5e2e3d0371fa923a0ba605c2f0d61"
 dependencies = [
  "array-bytes 4.2.0",
  "async-trait",

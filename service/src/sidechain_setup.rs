@@ -16,33 +16,88 @@
 */
 
 use crate::{
+	account_funding::AccountAndRole,
 	config::Config,
 	error::{Error, ServiceResult},
 	parentchain_handler::HandleParentchain,
 };
 use futures::executor::block_on;
-use itp_enclave_api::{
-	direct_request::DirectRequest, enclave_base::EnclaveBase, sidechain::Sidechain,
-};
+use itp_api_client_types::ParentchainApi;
+use itp_enclave_api::{enclave_base::EnclaveBase, sidechain::Sidechain};
+use itp_node_api::api_client::{pallet_sidechain::PalletSidechainApi, PalletTeerexApi};
 use itp_settings::{
 	files::{SIDECHAIN_PURGE_INTERVAL, SIDECHAIN_PURGE_LIMIT},
 	sidechain::SLOT_DURATION,
 };
-use itp_types::{Header, ShardIdentifier};
+use itp_types::{
+	parentchain::{AccountId, Balance, ParentchainId},
+	Header, ShardIdentifier, SidechainBlockNumber,
+};
 use its_consensus_slots::start_slot_worker;
 use its_primitives::types::block::SignedBlock as SignedSidechainBlock;
 use its_storage::{interface::FetchBlocks, start_sidechain_pruning_loop, BlockPruner};
 use log::*;
+use sp_runtime::{traits::IdentifyAccount, MultiSigner};
 use std::{sync::Arc, thread};
+use teerex_primitives::AnySigner;
 use tokio::runtime::Handle;
 
-pub(crate) fn sidechain_start_untrusted_rpc_server<Enclave, SidechainStorage>(
+/// Information about an account on a specified parentchain.
+pub trait ParentchainIntegriteeSidechainInfo {
+	fn last_finalized_block_number(&self) -> ServiceResult<SidechainBlockNumber>;
+	fn primary_worker_for_shard(&self) -> ServiceResult<AccountId>;
+	fn shard(&self) -> ServiceResult<ShardIdentifier>;
+}
+
+pub struct ParentchainIntegriteeSidechainInfoProvider {
+	node_api: ParentchainApi,
+	shard: ShardIdentifier,
+}
+
+impl ParentchainIntegriteeSidechainInfo for ParentchainIntegriteeSidechainInfoProvider {
+	fn last_finalized_block_number(&self) -> ServiceResult<SidechainBlockNumber> {
+		self.node_api
+			.latest_sidechain_block_confirmation(&self.shard, None)?
+			.map(|confirmation| confirmation.block_number)
+			.ok_or(Error::MissingLastFinalizedBlock)
+	}
+
+	fn primary_worker_for_shard(&self) -> ServiceResult<AccountId> {
+		self.node_api
+			.primary_worker_for_shard(&self.shard, None)
+			.map_err(|e| e.into())
+			.and_then(|maybe_enclave| {
+				maybe_enclave
+					.iter()
+					.filter_map(|enclave| {
+						if let AnySigner::Known(MultiSigner::Ed25519(signer)) =
+							enclave.instance_signer()
+						{
+							Some(signer.into_account().into())
+						} else {
+							None
+						}
+					})
+					.next()
+					.ok_or_else(|| Error::NoWorkerForShardFound(self.shard))
+			})
+	}
+	fn shard(&self) -> ServiceResult<ShardIdentifier> {
+		Ok(self.shard)
+	}
+}
+
+impl ParentchainIntegriteeSidechainInfoProvider {
+	pub fn new(node_api: ParentchainApi, shard: ShardIdentifier) -> Self {
+		ParentchainIntegriteeSidechainInfoProvider { node_api, shard }
+	}
+}
+
+pub(crate) fn sidechain_start_untrusted_rpc_server<SidechainStorage>(
 	config: &Config,
-	enclave: Arc<Enclave>,
 	sidechain_storage: Arc<SidechainStorage>,
 	tokio_handle: &Handle,
 ) where
-	Enclave: DirectRequest + Clone,
 	SidechainStorage: BlockPruner + FetchBlocks<SignedSidechainBlock> + Sync + Send + 'static,
 {
 	let untrusted_url = config.untrusted_worker_url();
@@ -51,9 +106,7 @@ pub(crate) fn sidechain_start_untrusted_rpc_server<Enclave, SidechainStorage>(
 		&untrusted_url
 	);
 	let _untrusted_rpc_join_handle = tokio_handle.spawn(async move {
-		itc_rpc_server::run_server(&untrusted_url, enclave, sidechain_storage)
-			.await
-			.unwrap();
+		itc_rpc_server::run_server(&untrusted_url, sidechain_storage).await.unwrap();
 	});
 }
 

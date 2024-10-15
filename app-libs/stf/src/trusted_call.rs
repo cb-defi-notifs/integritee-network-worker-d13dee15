@@ -24,7 +24,8 @@ use std::vec::Vec;
 #[cfg(feature = "evm")]
 use crate::evm_helpers::{create_code_hash, evm_create2_address, evm_create_address};
 use crate::{
-	helpers::{enclave_signer_account, ensure_enclave_signer_account, shard_vault},
+	guess_the_number::GuessTheNumberTrustedCall,
+	helpers::{enclave_signer_account, ensure_enclave_signer_account, shard_vault, wrap_bytes},
 	Getter,
 };
 use codec::{Compact, Decode, Encode};
@@ -63,15 +64,17 @@ use std::{format, prelude::v1::*, sync::Arc};
 
 #[derive(Encode, Decode, Clone, Debug, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
+#[repr(u8)]
+#[allow(clippy::unnecessary_cast)]
 pub enum TrustedCall {
-	noop(AccountId),
-	balance_set_balance(AccountId, AccountId, Balance, Balance),
-	balance_transfer(AccountId, AccountId, Balance),
-	balance_unshield(AccountId, AccountId, Balance, ShardIdentifier), // (AccountIncognito, BeneficiaryPublicAccount, Amount, Shard)
-	balance_shield(AccountId, AccountId, Balance, ParentchainId), // (Root, AccountIncognito, Amount, origin parentchain)
-	timestamp_set(AccountId, Moment, ParentchainId),              // (Root, now)
+	noop(AccountId) = 0,
+	timestamp_set(AccountId, Moment, ParentchainId) = 1, // (Root, now)
+	balance_transfer(AccountId, AccountId, Balance) = 2,
+	balance_unshield(AccountId, AccountId, Balance, ShardIdentifier) = 3, // (AccountIncognito, BeneficiaryPublicAccount, Amount, Shard)
+	balance_shield(AccountId, AccountId, Balance, ParentchainId) = 4, // (Root, AccountIncognito, Amount, origin parentchain)
+	guess_the_number(GuessTheNumberTrustedCall) = 50,
 	#[cfg(feature = "evm")]
-	evm_withdraw(AccountId, H160, Balance), // (Origin, Address EVM Account, Value)
+	evm_withdraw(AccountId, H160, Balance) = 90, // (Origin, Address EVM Account, Value)
 	// (Origin, Source, Target, Input, Value, Gas limit, Max fee per gas, Max priority fee per gas, Nonce, Access list)
 	#[cfg(feature = "evm")]
 	evm_call(
@@ -85,7 +88,7 @@ pub enum TrustedCall {
 		Option<U256>,
 		Option<U256>,
 		Vec<(H160, Vec<H256>)>,
-	),
+	) = 91,
 	// (Origin, Source, Init, Value, Gas limit, Max fee per gas, Max priority fee per gas, Nonce, Access list)
 	#[cfg(feature = "evm")]
 	evm_create(
@@ -98,7 +101,7 @@ pub enum TrustedCall {
 		Option<U256>,
 		Option<U256>,
 		Vec<(H160, Vec<H256>)>,
-	),
+	) = 92,
 	// (Origin, Source, Init, Salt, Value, Gas limit, Max fee per gas, Max priority fee per gas, Nonce, Access list)
 	#[cfg(feature = "evm")]
 	evm_create2(
@@ -112,13 +115,16 @@ pub enum TrustedCall {
 		Option<U256>,
 		Option<U256>,
 		Vec<(H160, Vec<H256>)>,
-	),
+	) = 93,
+	#[cfg(any(feature = "test", test))]
+	balance_set_balance(AccountId, AccountId, Balance, Balance) = 255,
 }
 
 impl TrustedCall {
 	pub fn sender_account(&self) -> &AccountId {
 		match self {
 			Self::noop(sender_account) => sender_account,
+			#[cfg(any(feature = "test", test))]
 			Self::balance_set_balance(sender_account, ..) => sender_account,
 			Self::balance_transfer(sender_account, ..) => sender_account,
 			Self::balance_unshield(sender_account, ..) => sender_account,
@@ -132,6 +138,7 @@ impl TrustedCall {
 			Self::evm_create(sender_account, ..) => sender_account,
 			#[cfg(feature = "evm")]
 			Self::evm_create2(sender_account, ..) => sender_account,
+			Self::guess_the_number(call) => call.sender_account(),
 		}
 	}
 }
@@ -199,7 +206,14 @@ impl TrustedCallVerification for TrustedCallSigned {
 		payload.append(&mut self.nonce.encode());
 		payload.append(&mut mrenclave.encode());
 		payload.append(&mut shard.encode());
-		self.signature.verify(payload.as_slice(), self.call.sender_account())
+
+		if self.signature.verify(payload.as_slice(), self.call.sender_account()) {
+			return true
+		};
+
+		// check if the signature is from an extension-dapp signer.
+		self.signature
+			.verify(wrap_bytes(&payload).as_slice(), self.call.sender_account())
 	}
 }
 
@@ -240,6 +254,7 @@ where
 				debug!("noop called by {}", account_id_to_string(&who),);
 				Ok::<(), Self::Error>(())
 			},
+			#[cfg(any(feature = "test", test))]
 			TrustedCall::balance_set_balance(root, who, free_balance, reserved_balance) => {
 				ensure!(is_root::<Runtime, AccountId>(&root), Self::Error::MissingPrivileges(root));
 				debug!(
@@ -559,20 +574,19 @@ where
 				info!("Trying to create evm contract with address {:?}", contract_address);
 				Ok(())
 			},
+			TrustedCall::guess_the_number(call) => call.execute(calls, node_metadata_repo),
 		}?;
 		Ok(())
 	}
 
 	fn get_storage_hashes_to_update(self) -> Vec<Vec<u8>> {
-		let key_hashes = Vec::new();
+		let mut key_hashes = Vec::new();
 		match self.call {
 			TrustedCall::noop(..) => debug!("No storage updates needed..."),
-			TrustedCall::balance_set_balance(..) => debug!("No storage updates needed..."),
-			TrustedCall::balance_transfer(..) => debug!("No storage updates needed..."),
-			TrustedCall::balance_unshield(..) => debug!("No storage updates needed..."),
-			TrustedCall::balance_shield(..) => debug!("No storage updates needed..."),
-			TrustedCall::timestamp_set(..) => debug!("No storage updates needed..."),
-			#[cfg(feature = "evm")]
+			TrustedCall::guess_the_number(call) =>
+				key_hashes.append(&mut <GuessTheNumberTrustedCall as ExecuteCall<
+					NodeMetadataRepository,
+				>>::get_storage_hashes_to_update(call)),
 			_ => debug!("No storage updates needed..."),
 		};
 		key_hashes
@@ -621,6 +635,7 @@ fn shield_funds(account: AccountId, amount: u128) -> Result<(), StfError> {
 	Ok(())
 }
 
+#[cfg(any(feature = "test", test))]
 fn is_root<Runtime, AccountId>(account: &AccountId) -> bool
 where
 	Runtime: frame_system::Config<AccountId = AccountId> + pallet_sudo::Config,
@@ -634,6 +649,21 @@ mod tests {
 	use super::*;
 	use itp_stf_primitives::types::KeyPair;
 	use sp_keyring::AccountKeyring;
+
+	use base58::FromBase58;
+
+	pub(crate) fn shard_from_base58(src: &str) -> ShardIdentifier {
+		ShardIdentifier::decode(
+			&mut src.from_base58().expect("shard has to be base58 encoded").as_slice(),
+		)
+		.unwrap()
+	}
+
+	pub(crate) fn mrenclave_from_base58(src: &str) -> [u8; 32] {
+		let mut mrenclave = [0u8; 32];
+		mrenclave.copy_from_slice(&src.from_base58().expect("mrenclave has to be base58 encoded"));
+		mrenclave
+	}
 
 	#[test]
 	fn verify_signature_works() {
@@ -655,5 +685,29 @@ mod tests {
 		);
 
 		assert!(signed_call.verify_signature(&mrenclave, &shard));
+	}
+
+	#[test]
+	fn extension_dapp_verify_signature_works() {
+		// This is a getter, which has been signed in the browser with the `signRaw` interface,
+		// which wraps the data in `<Bytes>...</Bytes>`
+		//
+		// see: https://github.com/polkadot-js/extension/pull/743
+		let dapp_extension_signed_call: Vec<u8> = vec![
+			3, 6, 72, 250, 19, 15, 144, 30, 85, 114, 224, 117, 219, 65, 218, 30, 241, 136, 74, 157,
+			10, 202, 233, 233, 100, 255, 63, 64, 102, 81, 215, 65, 60, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 73, 110, 99, 111, 103, 110, 105, 116, 101, 101, 84, 101,
+			115, 116, 110, 101, 116, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 51, 1,
+			0, 0, 0, 1, 54, 194, 196, 95, 0, 150, 174, 244, 180, 4, 197, 64, 98, 123, 229, 37, 222,
+			44, 232, 93, 170, 211, 231, 95, 157, 7, 88, 164, 204, 179, 171, 14, 68, 138, 43, 37,
+			155, 15, 245, 130, 224, 239, 138, 44, 83, 46, 63, 200, 86, 5, 182, 47, 195, 144, 170,
+			1, 108, 60, 4, 72, 201, 22, 212, 143,
+		];
+		let call = TrustedCallSigned::decode(&mut dapp_extension_signed_call.as_slice()).unwrap();
+
+		let mrenclave = mrenclave_from_base58("8weGnjvG3nh6UzoYjqaTjpWjX1ouNPioA1K5134DJc5j");
+		let shard = shard_from_base58("5wePd1LYa5M49ghwgZXs55cepKbJKhj5xfzQGfPeMS7c");
+		assert!(call.verify_signature(&mrenclave, &shard))
 	}
 }

@@ -23,12 +23,11 @@ use crate::{
 };
 use base58::{FromBase58, ToBase58};
 use codec::{Decode, Encode};
-use ita_parentchain_interface::integritee::Balance;
 use ita_stf::{Getter, TrustedCallSigned, TrustedGetter};
 use itc_rpc_client::direct_client::DirectApi;
 use itp_rpc::{RpcRequest, RpcResponse, RpcReturnValue};
 use itp_stf_primitives::types::{AccountId, KeyPair, ShardIdentifier, TrustedOperation};
-use itp_types::DirectRequestStatus;
+use itp_types::{AccountInfo, DirectRequestStatus};
 use itp_utils::{FromHexPrefixed, ToHexPrefixed};
 use log::*;
 use sp_application_crypto::sr25519;
@@ -40,16 +39,15 @@ use substrate_client_keystore::LocalKeystore;
 #[macro_export]
 macro_rules! get_layer_two_nonce {
 	($signer_pair:ident, $cli: ident, $trusted_args:ident ) => {{
-		use ita_stf::{Getter, TrustedCallSigned, TrustedGetter};
+		use ita_stf::{AccountInfo, Getter, TrustedCallSigned, TrustedGetter};
 		use $crate::trusted_command_utils::get_pending_trusted_calls_for;
 		let top = TrustedOperation::<TrustedCallSigned, Getter>::get(Getter::trusted(
-			TrustedGetter::nonce($signer_pair.public().into())
+			TrustedGetter::account_info($signer_pair.public().into())
 				.sign(&KeyPair::Sr25519(Box::new($signer_pair.clone()))),
 		));
 		// final nonce = current system nonce + pending tx count, panic early
-		let nonce = perform_trusted_operation::<Index>($cli, $trusted_args, &top)
-			.ok()
-			.unwrap_or_default();
+		let info = perform_trusted_operation::<AccountInfo>($cli, $trusted_args, &top);
+		let nonce = info.map(|i| i.nonce).ok().unwrap_or_default();
 		debug!("got system nonce: {:?}", nonce);
 		let pending_tx_count =
 			get_pending_trusted_calls_for($cli, $trusted_args, &$signer_pair.public().into()).len();
@@ -65,9 +63,10 @@ pub(crate) fn get_balance(cli: &Cli, trusted_args: &TrustedCli, arg_who: &str) -
 	debug!("arg_who = {:?}", arg_who);
 	let who = get_pair_from_str(trusted_args, arg_who);
 	let top = TrustedOperation::<TrustedCallSigned, Getter>::get(Getter::trusted(
-		TrustedGetter::free_balance(who.public().into()).sign(&KeyPair::Sr25519(Box::new(who))),
+		TrustedGetter::account_info(who.public().into()).sign(&KeyPair::Sr25519(Box::new(who))),
 	));
-	perform_trusted_operation::<Balance>(cli, trusted_args, &top).ok()
+	let info = perform_trusted_operation::<AccountInfo>(cli, trusted_args, &top).ok();
+	info.map(|i| i.data.free)
 }
 
 pub(crate) fn get_keystore_path(trusted_args: &TrustedCli) -> PathBuf {
@@ -108,18 +107,27 @@ pub(crate) fn get_pair_from_str(trusted_args: &TrustedCli, account: &str) -> sr2
 	info!("getting pair for {}", account);
 	match &account[..2] {
 		"//" => sr25519_core::Pair::from_string(account, None).unwrap(),
+		"0x" => sr25519_core::Pair::from_string_with_seed(account, None).unwrap().0,
 		_ => {
+			if sr25519::Public::from_ss58check(account).is_err() {
+				// could be mnemonic phrase
+				return sr25519_core::Pair::from_string_with_seed(account, None).unwrap().0
+			}
 			info!("fetching from keystore at {}", &TRUSTED_KEYSTORE_PATH);
 			// open store without password protection
 			let store = LocalKeystore::open(get_keystore_path(trusted_args), None)
 				.expect("store should exist");
 			info!("store opened");
-			let public_key = &sr25519::AppPublic::from_ss58check(account).unwrap();
-			info!("public_key: {:?}", &public_key);
-			let _pair = store.key_pair::<sr25519::AppPair>(public_key).unwrap().unwrap();
-			info!("key pair fetched");
+			let maybe_pair = store
+				.key_pair::<sr25519::AppPair>(
+					&sr25519::Public::from_ss58check(account).unwrap().into(),
+				)
+				.unwrap();
 			drop(store);
-			_pair.into()
+			match maybe_pair {
+				Some(pair) => pair.into(),
+				None => panic!("account not in my_trusted_keystore"),
+			}
 		},
 	}
 }

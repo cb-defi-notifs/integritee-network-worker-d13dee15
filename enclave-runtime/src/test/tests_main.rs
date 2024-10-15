@@ -18,7 +18,6 @@
 use crate::test::evm_pallet_tests;
 
 use crate::{
-	rpc,
 	sync::tests::{enclave_rw_lock_works, sidechain_rw_lock_works},
 	test::{
 		cert_tests::*,
@@ -113,7 +112,6 @@ pub extern "C" fn test_main_entrance() -> size_t {
 		test_retrieve_events,
 		test_retrieve_event_count,
 		test_reset_events,
-		rpc::worker_api_direct::tests::test_given_io_handler_methods_then_retrieve_all_names_as_string,
 		handle_state_mock::tests::initialized_shards_list_is_empty,
 		handle_state_mock::tests::shard_exists_after_inserting,
 		handle_state_mock::tests::from_shard_works,
@@ -263,7 +261,7 @@ fn test_submit_trusted_getter_to_top_pool() {
 
 	let sender = funded_pair();
 
-	let signed_getter = TrustedGetter::free_balance(sender.public().into()).sign(&sender.into());
+	let signed_getter = TrustedGetter::account_info(sender.public().into()).sign(&sender.into());
 
 	// when
 	submit_operation_to_top_pool(
@@ -290,7 +288,7 @@ fn test_differentiate_getter_and_call_works() {
 	// create accounts
 	let sender = funded_pair();
 
-	let signed_getter = TrustedGetter::free_balance(sender.public().into()).sign(&sender.into());
+	let signed_getter = TrustedGetter::account_info(sender.public().into()).sign(&sender.into());
 
 	let signed_call =
 		TrustedCall::balance_set_balance(sender.public().into(), sender.public().into(), 42, 42)
@@ -425,8 +423,8 @@ fn test_create_state_diff() {
 		get_from_state_diff(state_diff, &account_key_hash::<AccountId>(&receiver.into()));
 
 	// state diff should consist of the following updates:
-	// (last_hash, sidechain block_number, sender_funds, receiver_funds, fee_recipient account [no clear, after polkadot_v0.9.26 update], events)
-	assert_eq!(state_diff.len(), 7);
+	// (last_hash, sidechain block_number, sender_funds, receiver_funds, fee_recipient account [no clear, after polkadot_v0.9.26 update], events, timestamp, did_update)
+	assert_eq!(state_diff.len(), 12);
 	assert_eq!(receiver_acc_info.data.free, TX_AMOUNT);
 	assert_eq!(
 		sender_acc_info.data.free,

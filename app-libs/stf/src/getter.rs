@@ -16,7 +16,9 @@
 */
 
 use codec::{Decode, Encode};
-use ita_sgx_runtime::System;
+use ita_sgx_runtime::{
+	Balances, ParentchainIntegritee, ParentchainTargetA, ParentchainTargetB, System,
+};
 use itp_stf_interface::ExecuteGetter;
 use itp_stf_primitives::{
 	traits::GetterAuthorization,
@@ -34,7 +36,13 @@ use ita_sgx_runtime::{AddressMapping, HashedAddressMapping};
 #[cfg(feature = "evm")]
 use crate::evm_helpers::{get_evm_account, get_evm_account_codes, get_evm_account_storages};
 
+use crate::{
+	guess_the_number::{GuessTheNumberPublicGetter, GuessTheNumberTrustedGetter},
+	helpers::{shard_vault, wrap_bytes},
+};
+use itp_sgx_runtime_primitives::types::Moment;
 use itp_stf_primitives::traits::PoolTransactionValidation;
+use itp_types::parentchain::{BlockNumber, Hash, ParentchainId};
 #[cfg(feature = "evm")]
 use sp_core::{H160, H256};
 use sp_runtime::transaction_validity::{
@@ -92,30 +100,35 @@ impl PoolTransactionValidation for Getter {
 
 #[derive(Encode, Decode, Clone, Debug, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
+#[repr(u8)]
+#[allow(clippy::unnecessary_cast)]
 pub enum PublicGetter {
-	some_value,
+	some_value = 0,
+	total_issuance = 1,
+	parentchains_info = 10,
+	guess_the_number(GuessTheNumberPublicGetter) = 50,
 }
 
 #[derive(Encode, Decode, Clone, Debug, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
+#[repr(u8)]
+#[allow(clippy::unnecessary_cast)]
 pub enum TrustedGetter {
-	free_balance(AccountId),
-	reserved_balance(AccountId),
-	nonce(AccountId),
+	account_info(AccountId) = 0,
+	guess_the_number(GuessTheNumberTrustedGetter) = 50,
 	#[cfg(feature = "evm")]
-	evm_nonce(AccountId),
+	evm_nonce(AccountId) = 90,
 	#[cfg(feature = "evm")]
-	evm_account_codes(AccountId, H160),
+	evm_account_codes(AccountId, H160) = 91,
 	#[cfg(feature = "evm")]
-	evm_account_storages(AccountId, H160, H256),
+	evm_account_storages(AccountId, H160, H256) = 92,
 }
 
 impl TrustedGetter {
 	pub fn sender_account(&self) -> &AccountId {
 		match self {
-			TrustedGetter::free_balance(sender_account) => sender_account,
-			TrustedGetter::reserved_balance(sender_account) => sender_account,
-			TrustedGetter::nonce(sender_account) => sender_account,
+			TrustedGetter::account_info(sender_account) => sender_account,
+			TrustedGetter::guess_the_number(getter) => getter.sender_account(),
 			#[cfg(feature = "evm")]
 			TrustedGetter::evm_nonce(sender_account) => sender_account,
 			#[cfg(feature = "evm")]
@@ -143,8 +156,15 @@ impl TrustedGetterSigned {
 	}
 
 	pub fn verify_signature(&self) -> bool {
+		let encoded = self.getter.encode();
+
+		if self.signature.verify(encoded.as_slice(), self.getter.sender_account()) {
+			return true
+		};
+
+		// check if the signature is from an extension-dapp signer.
 		self.signature
-			.verify(self.getter.encode().as_slice(), self.getter.sender_account())
+			.verify(wrap_bytes(&encoded).as_slice(), self.getter.sender_account())
 	}
 }
 
@@ -167,26 +187,14 @@ impl ExecuteGetter for Getter {
 impl ExecuteGetter for TrustedGetterSigned {
 	fn execute(self) -> Option<Vec<u8>> {
 		match self.getter {
-			TrustedGetter::free_balance(who) => {
+			TrustedGetter::account_info(who) => {
 				let info = System::account(&who);
-				debug!("TrustedGetter free_balance");
+				debug!("TrustedGetter account_data");
 				debug!("AccountInfo for {} is {:?}", account_id_to_string(&who), info);
-				std::println!("⣿STF⣿ 🔍 TrustedGetter query: free balance for ⣿⣿⣿ is ⣿⣿⣿",);
-				Some(info.data.free.encode())
+				std::println!("⣿STF⣿ 🔍 TrustedGetter query: account info for ⣿⣿⣿ is ⣿⣿⣿",);
+				Some(info.encode())
 			},
-			TrustedGetter::reserved_balance(who) => {
-				let info = System::account(&who);
-				debug!("TrustedGetter reserved_balance");
-				debug!("AccountInfo for {} is {:?}", account_id_to_string(&who), info);
-				debug!("Account reserved balance is {}", info.data.reserved);
-				Some(info.data.reserved.encode())
-			},
-			TrustedGetter::nonce(who) => {
-				let nonce = System::account_nonce(&who);
-				debug!("TrustedGetter nonce");
-				debug!("Account nonce is {}", nonce);
-				Some(nonce.encode())
-			},
+			TrustedGetter::guess_the_number(getter) => getter.execute(),
 			#[cfg(feature = "evm")]
 			TrustedGetter::evm_nonce(who) => {
 				let evm_account = get_evm_account(&who);
@@ -220,7 +228,13 @@ impl ExecuteGetter for TrustedGetterSigned {
 	}
 
 	fn get_storage_hashes_to_update(self) -> Vec<Vec<u8>> {
-		Vec::new()
+		let mut key_hashes = Vec::new();
+		match self.getter {
+			TrustedGetter::guess_the_number(getter) =>
+				key_hashes.append(&mut getter.get_storage_hashes_to_update()),
+			_ => debug!("No storage updates needed..."),
+		};
+		key_hashes
 	}
 }
 
@@ -228,10 +242,116 @@ impl ExecuteGetter for PublicGetter {
 	fn execute(self) -> Option<Vec<u8>> {
 		match self {
 			PublicGetter::some_value => Some(42u32.encode()),
+			PublicGetter::total_issuance => Some(Balances::total_issuance().encode()),
+			PublicGetter::parentchains_info => {
+				let integritee = ParentchainInfo {
+					id: ParentchainId::Integritee,
+					genesis_hash: ParentchainIntegritee::parentchain_genesis_hash(),
+					block_number: ParentchainIntegritee::block_number(),
+					now: ParentchainIntegritee::now(),
+					creation_block_number: ParentchainIntegritee::creation_block_number(),
+					creation_timestamp: ParentchainIntegritee::creation_timestamp(),
+				};
+				let target_a = ParentchainInfo {
+					id: ParentchainId::TargetA,
+					genesis_hash: ParentchainTargetA::parentchain_genesis_hash(),
+					block_number: ParentchainTargetA::block_number(),
+					now: ParentchainTargetA::now(),
+					creation_block_number: ParentchainTargetA::creation_block_number(),
+					creation_timestamp: ParentchainTargetA::creation_timestamp(),
+				};
+				let target_b = ParentchainInfo {
+					id: ParentchainId::TargetB,
+					genesis_hash: ParentchainTargetB::parentchain_genesis_hash(),
+					block_number: ParentchainTargetB::block_number(),
+					now: ParentchainTargetB::now(),
+					creation_block_number: ParentchainTargetB::creation_block_number(),
+					creation_timestamp: ParentchainTargetB::creation_timestamp(),
+				};
+				let parentchains_info = ParentchainsInfo {
+					integritee,
+					target_a,
+					target_b,
+					shielding_target: shard_vault()
+						.map(|v| v.1)
+						.unwrap_or(ParentchainId::Integritee),
+				};
+				Some(parentchains_info.encode())
+			},
+			PublicGetter::guess_the_number(getter) => getter.execute(),
 		}
 	}
 
 	fn get_storage_hashes_to_update(self) -> Vec<Vec<u8>> {
-		Vec::new()
+		let mut key_hashes = Vec::new();
+		match self {
+			Self::guess_the_number(getter) =>
+				key_hashes.append(&mut getter.get_storage_hashes_to_update()),
+			_ => debug!("No storage updates needed..."),
+		};
+		key_hashes
+	}
+}
+
+/// General public information about the sync status of all parentchains
+#[derive(Encode, Decode, Debug, Clone, PartialEq, Eq)]
+pub struct ParentchainsInfo {
+	/// info for the integritee network parentchain
+	pub integritee: ParentchainInfo,
+	/// info for the target A parentchain
+	pub target_a: ParentchainInfo,
+	/// info for the target B parentchain
+	pub target_b: ParentchainInfo,
+	/// which of the parentchains is used as a shielding target?
+	pub shielding_target: ParentchainId,
+}
+
+/// General public information about the sync status of a parentchain
+#[derive(Encode, Decode, Debug, Clone, PartialEq, Eq)]
+pub struct ParentchainInfo {
+	/// the parentchain id for internal use
+	id: ParentchainId,
+	/// the genesis hash of the parentchain
+	genesis_hash: Option<Hash>,
+	/// the last imported parentchain block number
+	block_number: Option<BlockNumber>,
+	/// the timestamp of the last imported parentchain block
+	now: Option<Moment>,
+	/// the parentchain block number which preceded the creation of this shard
+	creation_block_number: Option<BlockNumber>,
+	/// the timestamp of creation for this shard
+	creation_timestamp: Option<Moment>,
+}
+mod tests {
+	use super::*;
+
+	#[test]
+	fn extension_dapp_signature_works() {
+		// This is a getter, which has been signed in the browser with the `signRaw` interface,
+		// which wraps the data in `<Bytes>...</Bytes>`
+		//
+		// see: https://github.com/polkadot-js/extension/pull/743
+		let dapp_extension_signed_getter: Vec<u8> = vec![
+			1, 0, 6, 72, 250, 19, 15, 144, 30, 85, 114, 224, 117, 219, 65, 218, 30, 241, 136, 74,
+			157, 10, 202, 233, 233, 100, 255, 63, 64, 102, 81, 215, 65, 60, 1, 192, 224, 67, 233,
+			49, 104, 156, 159, 245, 26, 136, 60, 88, 123, 174, 171, 67, 215, 124, 223, 112, 16,
+			133, 35, 138, 241, 36, 68, 27, 41, 63, 14, 103, 132, 201, 130, 216, 43, 81, 123, 71,
+			149, 215, 191, 100, 58, 182, 123, 229, 188, 245, 130, 66, 202, 126, 51, 137, 140, 56,
+			44, 176, 239, 51, 131,
+		];
+		let getter = Getter::decode(&mut dapp_extension_signed_getter.as_slice()).unwrap();
+
+		if let Getter::trusted(trusted) = getter {
+			let g = &trusted.getter;
+			let signature = &trusted.signature;
+
+			// check the signature check itself works
+			assert!(signature.verify(wrap_bytes(&g.encode()).as_slice(), g.sender_account()));
+
+			// check that the trusted getter's method works
+			assert!(trusted.verify_signature())
+		} else {
+			panic!("invalid getter")
+		}
 	}
 }

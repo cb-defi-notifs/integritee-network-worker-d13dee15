@@ -21,9 +21,8 @@ use crate::{
 	error::{Error, Result as EnclaveResult},
 	initialization::global_components::{
 		EnclaveBlockImportConfirmationHandler, EnclaveGetterExecutor, EnclaveLightClientSeal,
-		EnclaveOCallApi, EnclaveRpcConnectionRegistry, EnclaveRpcResponder,
-		EnclaveShieldingKeyRepository, EnclaveSidechainApi, EnclaveSidechainBlockImportQueue,
-		EnclaveSidechainBlockImportQueueWorker, EnclaveSidechainBlockImporter,
+		EnclaveRpcConnectionRegistry, EnclaveRpcResponder, EnclaveShieldingKeyRepository,
+		EnclaveSidechainApi, EnclaveSidechainBlockImportQueueWorker, EnclaveSidechainBlockImporter,
 		EnclaveSidechainBlockSyncer, EnclaveStateFileIo, EnclaveStateHandler,
 		EnclaveStateInitializer, EnclaveStateObserver, EnclaveStateSnapshotRepository,
 		EnclaveStfEnclaveSigner, EnclaveTopPool, EnclaveTopPoolAuthor,
@@ -38,7 +37,7 @@ use crate::{
 		GLOBAL_WEB_SOCKET_SERVER_COMPONENT,
 	},
 	ocall::OcallApi,
-	rpc::{rpc_response_channel::RpcResponseChannel, worker_api_direct::public_api_rpc_handler},
+	rpc::{common_api::add_common_api, rpc_response_channel::RpcResponseChannel},
 	utils::{
 		get_extrinsic_factory_from_integritee_solo_or_parachain,
 		get_node_metadata_repository_from_integritee_solo_or_parachain,
@@ -77,6 +76,7 @@ use itp_top_pool::pool::Options as PoolOptions;
 use itp_top_pool_author::author::AuthorTopFilter;
 use itp_types::{parentchain::ParentchainId, ShardIdentifier};
 use its_sidechain::block_composer::BlockComposer;
+use jsonrpc_core::IoHandler;
 use log::*;
 use sp_core::crypto::Pair;
 use std::{collections::HashMap, path::PathBuf, string::String, sync::Arc};
@@ -169,19 +169,33 @@ pub(crate) fn init_enclave(
 	let top_pool_author = create_top_pool_author(
 		connection_registry.clone(),
 		state_handler,
-		ocall_api.clone(),
 		shielding_key_repository.clone(),
 	);
 	GLOBAL_TOP_POOL_AUTHOR_COMPONENT.initialize(top_pool_author.clone());
 
 	let getter_executor = Arc::new(EnclaveGetterExecutor::new(state_observer));
-	let io_handler =
-		public_api_rpc_handler(top_pool_author, getter_executor, shielding_key_repository);
+
+	let mut io_handler = IoHandler::new();
+	add_common_api(
+		&mut io_handler,
+		top_pool_author,
+		getter_executor,
+		shielding_key_repository,
+		ocall_api.clone(),
+	);
+
+	#[cfg(feature = "sidechain")]
+	{
+		use crate::initialization::global_components::EnclaveSidechainBlockImportQueue;
+		use its_rpc_handler::add_sidechain_api;
+		let sidechain_block_import_queue = Arc::new(EnclaveSidechainBlockImportQueue::default());
+		GLOBAL_SIDECHAIN_IMPORT_QUEUE_COMPONENT.initialize(sidechain_block_import_queue);
+		let sidechain_import_queue = GLOBAL_SIDECHAIN_IMPORT_QUEUE_COMPONENT.get()?;
+		add_sidechain_api(&mut io_handler, sidechain_import_queue);
+	}
+
 	let rpc_handler = Arc::new(RpcWsHandler::new(io_handler, watch_extractor, connection_registry));
 	GLOBAL_RPC_WS_HANDLER_COMPONENT.initialize(rpc_handler);
-
-	let sidechain_block_import_queue = Arc::new(EnclaveSidechainBlockImportQueue::default());
-	GLOBAL_SIDECHAIN_IMPORT_QUEUE_COMPONENT.initialize(sidechain_block_import_queue);
 
 	let attestation_handler =
 		Arc::new(IntelAttestationHandler::new(ocall_api, signing_key_repository));
@@ -293,7 +307,6 @@ pub(crate) fn init_shard(shard: ShardIdentifier) -> EnclaveResult<()> {
 pub fn create_top_pool_author(
 	connection_registry: Arc<EnclaveRpcConnectionRegistry>,
 	state_handler: Arc<EnclaveStateHandler>,
-	ocall_api: Arc<EnclaveOCallApi>,
 	shielding_key_repository: Arc<EnclaveShieldingKeyRepository>,
 ) -> Arc<EnclaveTopPoolAuthor> {
 	let response_channel = Arc::new(RpcResponseChannel::default());
@@ -308,6 +321,5 @@ pub fn create_top_pool_author(
 		AuthorTopFilter::<TrustedCallSigned, Getter>::new(),
 		state_handler,
 		shielding_key_repository,
-		ocall_api,
 	))
 }

@@ -19,10 +19,12 @@
 #![feature(structural_match)]
 #![feature(rustc_attrs)]
 #![feature(core_intrinsics)]
+#![feature(arbitrary_enum_discriminant)]
 #![feature(derive_eq)]
 #![cfg_attr(all(not(target_env = "sgx"), not(feature = "std")), no_std)]
 #![cfg_attr(target_env = "sgx", feature(rustc_private))]
 
+extern crate alloc;
 #[cfg(all(not(feature = "std"), feature = "sgx"))]
 extern crate sgx_tstd as std;
 
@@ -33,6 +35,7 @@ pub use trusted_call::*;
 #[cfg(feature = "evm")]
 pub mod evm_helpers;
 pub mod getter;
+pub mod guess_the_number;
 pub mod hash;
 pub mod helpers;
 pub mod stf_sgx;
@@ -45,5 +48,7 @@ pub mod trusted_call;
 
 pub(crate) const ENCLAVE_ACCOUNT_KEY: &str = "Enclave_Account_Key";
 
-// fixme: this if  a temporary hack only
-pub const STF_TX_FEE: Balance = 100000000;
+// fixme: this if a temporary hack only. double-check decimals for target chain
+// as long as it is hard-coded, needs to be reasonable for 10 (Paseo) and 12 decimals
+pub const STF_TX_FEE: Balance = 100_000_000;
+pub const STF_GUESS_FEE: Balance = 10_000_000_000;

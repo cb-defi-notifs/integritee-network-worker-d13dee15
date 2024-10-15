@@ -33,7 +33,7 @@ use sp_core::{crypto::Ss58Codec, Pair};
 use std::boxed::Box;
 #[derive(Parser)]
 pub struct UnshieldFundsCommand {
-	/// Sender's incognito AccountId in ss58check format
+	/// Sender's incognito AccountId in ss58check format, mnemonic or hex seed
 	from: String,
 
 	/// Recipient's parentchain AccountId in ss58check format

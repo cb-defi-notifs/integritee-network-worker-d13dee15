@@ -26,7 +26,7 @@ use sp_core::Pair;
 
 #[derive(Parser)]
 pub struct NonceCommand {
-	/// AccountId in ss58check format
+	/// AccountId in ss58check format, mnemonic or hex seed
 	account: String,
 }
 

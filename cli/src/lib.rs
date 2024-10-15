@@ -34,6 +34,7 @@ mod benchmark;
 mod command_utils;
 #[cfg(feature = "evm")]
 mod evm;
+mod guess_the_number;
 #[cfg(feature = "teeracle")]
 mod oracle;
 mod trusted_base_cli;
@@ -45,6 +46,7 @@ pub mod commands;
 
 use crate::commands::Commands;
 use clap::Parser;
+use ita_stf::{guess_the_number::GuessTheNumberInfo, ParentchainsInfo};
 use itp_node_api::api_client::Metadata;
 use sp_application_crypto::KeyTypeId;
 use sp_core::{H160, H256};
@@ -59,9 +61,12 @@ pub(crate) const ED25519_KEY_TYPE: KeyTypeId = KeyTypeId(*b"ed25");
 #[clap(name = "integritee-cli")]
 #[clap(version = VERSION)]
 #[clap(author = "Integritee AG <hello@integritee.network>")]
-#[cfg_attr(feature = "teeracle", clap(about = "interact with integritee-node and teeracle", long_about = None))]
-#[cfg_attr(feature = "sidechain", clap(about = "interact with integritee-node and sidechain", long_about = None))]
-#[cfg_attr(feature = "offchain-worker", clap(about = "interact with integritee-node and offchain-worker", long_about = None))]
+#[cfg_attr(feature = "teeracle", clap(about = "interact with integritee-node and teeracle", long_about = None
+))]
+#[cfg_attr(feature = "sidechain", clap(about = "interact with integritee-node and sidechain", long_about = None
+))]
+#[cfg_attr(feature = "offchain-worker", clap(about = "interact with integritee-node and offchain-worker", long_about = None
+))]
 #[clap(after_help = "stf subcommands depend on the stf crate this has been built against")]
 pub struct Cli {
 	/// node url
@@ -92,8 +97,8 @@ pub enum CliResultOk {
 	Balance {
 		balance: u128,
 	},
-	MrEnclaveBase58 {
-		mr_enclaves: Vec<String>,
+	FingerprintBase58 {
+		fingerprints: Vec<String>,
 	},
 	Metadata {
 		metadata: Metadata,
@@ -104,6 +109,18 @@ pub enum CliResultOk {
 	/// Result of "EvmCreateCommands": execution_address
 	H160 {
 		hash: H160,
+	},
+	U32 {
+		value: u32,
+	},
+	ParentchainsInfo {
+		info: ParentchainsInfo,
+	},
+	GuessAttempts {
+		value: u8,
+	},
+	GuessTheNumberPotInfo {
+		info: GuessTheNumberInfo,
 	},
 	// TODO should ideally be removed; or at least drastically less used
 	// We WANT all commands exposed by the cli to return something useful for the caller(ie instead of printing)
